@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.csv
+*.png
+*.pdf
