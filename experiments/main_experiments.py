@@ -23,19 +23,28 @@ def run_dataset(name, args):
     output = Path(args.output_dir)
     for seed in args.seeds:
         suffix = f"_tailcal_gamma{args.lambda_value:g}" if getattr(args, "tailcal_version", None) == "v4" else ""
-        checkpoint = output / "checkpoints" / f"{name.lower()}_seed{seed}{suffix}.pt"
+        dirichlet_value = getattr(args, "dirichlet_alpha", None)
+        checkpoint_tag = suffix
+        if dirichlet_value is not None:
+            checkpoint_tag += f"_dirichlet{dirichlet_value:g}"
+        checkpoint = output / "checkpoints" / f"{name.lower()}_seed{seed}{checkpoint_tag}.pt"
         if checkpoint.exists():
             model = build_model(spec, device)
             model.load_state_dict(torch.load(checkpoint, map_location=device))
             _, _, client_val, calibration, meta = train_model(spec, seed, train_x, train_y, train_labels, device, alpha=getattr(args, "dirichlet_alpha", None), rounds=0)
         else:
-            model, _, client_val, calibration, meta = train_model(spec, seed, train_x, train_y, train_labels, device, alpha=getattr(args, "dirichlet_alpha", None), checkpoint=checkpoint, tailcal_gamma=getattr(args, "lambda_value", None) if getattr(args, "tailcal_version", None) == "v4" else None)
+            model, _, client_val, calibration, meta = train_model(spec, seed, train_x, train_y, train_labels, device, alpha=getattr(args, "dirichlet_alpha", None), rounds=getattr(args, "rounds", None), checkpoint=checkpoint, tailcal_gamma=getattr(args, "lambda_value", None) if getattr(args, "tailcal_version", None) == "v4" else None)
         client_eval, rates = client_eval_indices(test_labels, meta, spec, seed, args.eval_examples)
         temperatures = temperatures_from_calibration(model, train_x, train_y, calibration, client_val, device, meta)
         method_temperatures = {"Raw": 1.0, "GlobalTS": temperatures[0], "LocalTS": temperatures[1], "FedTS": temperatures[2]}
         if getattr(args, "tailcal_version", None):
             method_temperatures = tailcal_temperatures(model, train_x, train_y, calibration, client_val, meta, device, args.tailcal_version, getattr(args, "lambda_value", 1.0))
-        protocols = [("small_local_val", logits_for_indices(model, train_x, train_y, client_val, device), [0.0] * len(meta)), ("large_client_eval", logits_for_indices(model, test_x, test_y, client_eval, device), rates)]
+        small_records = logits_for_indices(model, train_x, train_y, client_val, device)
+        large_records = logits_for_indices(model, test_x, test_y, client_eval, device)
+        cache_dir = output / "prediction_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(cache_dir / f"{name.lower()}_seed{seed}.npz", client_ids=np.arange(len(meta)), logits=np.asarray([item[0] for item in large_records], dtype=object), labels=np.asarray([item[1] for item in large_records], dtype=object), weights=np.asarray([item["weight"] for item in meta], dtype=float))
+        protocols = [("small_local_val", small_records, [0.0] * len(meta)), ("large_client_eval", large_records, rates)]
         for protocol, records, replacement in protocols:
             for estimator in ESTIMATORS:
                 for method, temperature in method_temperatures.items():
@@ -56,6 +65,7 @@ def parse_args():
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44, 45, 46])
     parser.add_argument("--eval-examples", type=int, default=200)
     parser.add_argument("--tail-alpha", type=float, default=0.20)
+    parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     return parser.parse_args()
 

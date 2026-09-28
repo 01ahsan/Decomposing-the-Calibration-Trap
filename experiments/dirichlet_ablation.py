@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--alphas", nargs="+", type=float, default=[0.05, 0.10, 0.30, 0.50])
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--rounds", type=int, default=150)
     args = parser.parse_args()
     rows = []
     for alpha in args.alphas:

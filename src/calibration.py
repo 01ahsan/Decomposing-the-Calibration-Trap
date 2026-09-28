@@ -47,6 +47,17 @@ def aggregate_metrics(eces, weights, tail_alpha=0.20):
     return {"cwece": cwece, "tailece": tail, "tailgap": tail - cwece, "tailtrap": tail / max(cwece, 1e-12), "worst_ece": float(eces.max())}
 
 
+def aggregate_metrics_full(eces, weights, tail_alpha=0.20):
+    eces, weights = np.asarray(eces, float), np.asarray(weights, float)
+    valid = np.isfinite(eces)
+    eces, weights = eces[valid], weights[valid]
+    weights = weights / weights.sum()
+    uniform = float(eces.mean())
+    main = aggregate_metrics(eces, weights, tail_alpha)
+    covariance = float(np.mean((weights - 1.0 / len(eces)) * (eces - uniform)))
+    return {**main, "uwece": uniform, "a_tail_heterogeneity": main["tailece"] / max(uniform, 1e-12), "m_sample_weight_masking": uniform / max(main["cwece"], 1e-12), "k_cov_u_w_ece": len(eces) * covariance, "pearson_r_weight_ece": float(np.corrcoef(weights, eces)[0, 1]) if np.std(weights) and np.std(eces) else np.nan}
+
+
 def proposition2_stats(eces, weights):
     eces, weights = np.asarray(eces, float), np.asarray(weights, float)
     weights /= weights.sum()

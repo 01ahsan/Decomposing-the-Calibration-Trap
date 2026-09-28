@@ -39,19 +39,30 @@ def tailcal_aggregate(parameter_sets, meta, gamma=3.0, tail_fraction=0.20):
     return {key: sum(value[key].float() * weights[i] for i, value in enumerate(parameter_sets)) for key in parameter_sets[0]}
 
 
-def local_update(model, ids, train_x, train_y, spec: DatasetSpec, device):
+def local_update(model, ids, train_x, train_y, spec: DatasetSpec, device, label_smoothing=0.0, reference=None, distill_weight=0.0, distill_x=None, distill_y=None, lr_scale=1.0):
     model.train()
     indices = torch.as_tensor(ids, dtype=torch.long, device=device)
     x, y = train_x[indices], train_y[indices]
-    optimizer = optim.SGD(model.parameters(), lr=spec.local_lr, momentum=spec.momentum, weight_decay=spec.weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=spec.local_lr * lr_scale, momentum=spec.momentum, weight_decay=spec.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=spec.local_epochs)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     for _ in range(spec.local_epochs):
         order = torch.randperm(len(y), device=device)
         for start in range(0, len(y), spec.batch_size):
             batch = order[start:start + spec.batch_size]
             optimizer.zero_grad(set_to_none=True)
-            loss = criterion(model(augment_batch(x[batch], spec)), y[batch])
+            student_input = augment_batch(x[batch], spec)
+            student_logits = model(student_input)
+            loss = criterion(student_logits, y[batch])
+            if reference is not None and distill_weight > 0:
+                if distill_x is None or distill_y is None:
+                    raise ValueError("v4 distillation requires the global calibration set.")
+                cal_order = torch.randperm(len(distill_y), device=device)[:min(len(distill_y), spec.batch_size)]
+                calibration_input = distill_x[cal_order]
+                student_calibration_logits = model(calibration_input)
+                with torch.no_grad():
+                    teacher_logits = reference(calibration_input)
+                loss = loss + distill_weight * torch.nn.functional.kl_div(torch.log_softmax(student_calibration_logits, dim=1), torch.softmax(teacher_logits, dim=1), reduction="batchmean")
             loss.backward()
             optimizer.step()
         scheduler.step()
